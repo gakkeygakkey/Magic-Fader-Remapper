@@ -34,7 +34,7 @@ final class ProxyModel: ObservableObject {
     private var connectedStatus: String {
         var modes: [String] = []
         if recRemapEnabled { modes.append("Rec → Touch / Read") }
-        if trimRemapEnabled && isMagicFader { modes.append("メトロノーム → Trim") }
+        if trimRemapEnabled && isMagicFader { modes.append("録音ボタン → Trim") }
         return "中継中 · " + (modes.isEmpty ? "Remap OFF" : modes.joined(separator: " · "))
     }
     @Published var releaseRepairEnabled = false {
@@ -46,9 +46,18 @@ final class ProxyModel: ObservableObject {
     @Published private(set) var isMagicFader = false
     @Published private(set) var trimTarget: Int?
 
+    @Published var refreshEnabled = false {
+        didSet {
+            UserDefaults.standard.set(refreshEnabled, forKey: Self.refreshPreferenceKey)
+            proxy.setRefresh(refreshEnabled)
+        }
+    }
+    @Published private(set) var refreshNotice = "停止・位置通知を待機"
+
     @Published var recording = false {
         didSet { proxy.setRecording(recording) }
     }
+    private static let refreshPreferenceKey = "MagicFaderRefreshEnabled"
     private static let releaseRepairPreferenceKey = "MagicFaderSoloReleaseRepairEnabled"
     private static let trimPreferenceKey = "MagicFaderTrimRemapEnabled"
     private static let remapPreferenceKey = "RemapEnabled"
@@ -75,6 +84,8 @@ final class ProxyModel: ObservableObject {
         proxy.setTrimRemap(trimRemapEnabled)
         releaseRepairEnabled = UserDefaults.standard.bool(forKey: Self.releaseRepairPreferenceKey)
         proxy.setReleaseRepair(releaseRepairEnabled)
+        refreshEnabled = defaults.bool(forKey: Self.refreshPreferenceKey)
+        proxy.setRefresh(refreshEnabled)
         start()
         timer = Timer.publish(every: 0.25, on: .main, in: .common).autoconnect().sink { [weak self] _ in
             self?.poll()
@@ -178,7 +189,7 @@ final class ProxyModel: ObservableObject {
     }
 
     func copyLog() {
-        let header = "HUI-RM Phase 2 | Rec → Touch / Read; Click → Trim | UMP hexadecimal | retained \(log.count), omitted \(omitted) | timestamp: CoreMIDI host ticks\n"
+        let header = "HUI-RM Phase 2 | Rec → Touch / Read; Transport Record → Trim; Click → Refresh (optional) | UMP hexadecimal | retained \(log.count), omitted \(omitted) | timestamp: CoreMIDI host ticks\n"
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(header + log.map(\.line).joined(separator: "\n"), forType: .string)
     }
@@ -195,6 +206,7 @@ final class ProxyModel: ObservableObject {
             refresh()
             nextEndpointScan = ProcessInfo.processInfo.systemUptime + 2
         }
+        refreshNotice = snapshot.refreshNotice
         trimTarget = snapshot.trimTarget.map { Int($0) + 1 }
         toHost = snapshot.toHost
         toDevice = snapshot.toDevice

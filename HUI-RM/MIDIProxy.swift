@@ -37,6 +37,9 @@ final class MIDIProxy: @unchecked Sendable {
     private var releaseRepair = MagicFaderReleaseRepair()
     private var releaseRepairEnabled = false
     private var isMagicFader = false
+    private var refreshEnabled = false
+    private var faderRefresh = FaderRefresh()
+    private var refreshTimerRunning = false
     private let releaseQueue = DispatchQueue(label: "HUI-RM.SoloRelease")
     private var recording = false
     private var events: [MonitorEvent] = []
@@ -57,6 +60,7 @@ final class MIDIProxy: @unchecked Sendable {
         let lastFailure: OSStatus
         let topologyChanged: Bool
         let trimTarget: UInt8?
+        let refreshNotice: String
     }
 
     @MainActor
@@ -156,6 +160,15 @@ final class MIDIProxy: @unchecked Sendable {
             let restore = remapper.modeChanged(enabled: false)
             if !restore.isEmpty { sendToController(restore, timestamp: 0, direction: "HUI-RM → Controller [Recランプ復元]") }
         }
+        if trimRemapEnabled, isMagicFader, hardwareDestination != 0, outputPort != 0 {
+            sendToController(remapper.trimModeChanged(enabled: false), timestamp: 0, direction: "HUI-RM → Controller [録音ランプ復元]")
+        }
+        if isMagicFader, hardwareDestination != 0, outputPort != 0 {
+            sendToController(faderRefresh.disable(now: ProcessInfo.processInfo.systemUptime), timestamp: 0,
+                             direction: "HUI-RM → Controller [リフレッシュ終了・復帰]")
+        }
+        faderRefresh = FaderRefresh()
+        refreshTimerRunning = false
         inputPort = 0
         hardwareSource = 0
         hardwareDestination = 0
@@ -197,7 +210,11 @@ final class MIDIProxy: @unchecked Sendable {
 
     func setTrimRemap(_ enabled: Bool) {
         lock.lock()
+        guard trimRemapEnabled != enabled else { lock.unlock(); return }
         trimRemapEnabled = enabled
+        if isMagicFader, hardwareDestination != 0, outputPort != 0 {
+            sendToController(remapper.trimModeChanged(enabled: enabled), timestamp: 0, direction: "HUI-RM → Controller [Trimランプ同期/復元]")
+        }
         lock.unlock()
     }
 
@@ -208,6 +225,35 @@ final class MIDIProxy: @unchecked Sendable {
             _ = sendToHost(releaseRepair.finishPending(), direction: "HUI-RM → Pro Tools [Solo Release補完終了]")
         }
         releaseRepairEnabled = enabled
+    }
+
+    func setRefresh(_ enabled: Bool) {
+        lock.lock()
+        defer { lock.unlock() }
+        refreshEnabled = enabled
+        if !enabled, isMagicFader, hardwareDestination != 0 {
+            sendToController(faderRefresh.disable(now: ProcessInfo.processInfo.systemUptime), timestamp: 0,
+                             direction: "HUI-RM → Controller [リフレッシュOFF・復帰]")
+        }
+    }
+
+    private func startRefreshTimer() {
+        guard faderRefresh.active, !refreshTimerRunning else { return }
+        refreshTimerRunning = true
+        scheduleRefreshTick(generation)
+    }
+
+    private func scheduleRefreshTick(_ token: Int) {
+        releaseQueue.asyncAfter(deadline: .now() + .milliseconds(50)) { [weak self] in
+            guard let self else { return }
+            self.lock.lock()
+            defer { self.lock.unlock() }
+            guard self.generation == token, self.isMagicFader, self.hardwareDestination != 0 else { return }
+            let output = self.faderRefresh.tick(now: ProcessInfo.processInfo.systemUptime)
+            self.sendToController(output, timestamp: 0, direction: "HUI-RM → Controller [フェーダー復帰]")
+            if self.faderRefresh.active { self.scheduleRefreshTick(token) }
+            else { self.refreshTimerRunning = false }
+        }
     }
 
     private func scheduleRelease(_ ticket: MagicFaderReleaseRepair.Ticket) {
@@ -254,8 +300,11 @@ final class MIDIProxy: @unchecked Sendable {
     func snapshot() -> Snapshot {
         lock.lock()
         defer { lock.unlock() }
+        if trimRemapEnabled, isMagicFader, hardwareDestination != 0, outputPort != 0 {
+            sendToController(remapper.trimLEDUpdate(), timestamp: 0, direction: "HUI-RM → Controller [Trimランプ反映]")
+        }
         let value = Snapshot(events: events, omitted: omitted, toHost: toHost, toDevice: toDevice,
-                             failures: failures, lastFailure: lastFailure, topologyChanged: topologyChanged, trimTarget: remapper.trimTarget)
+                             failures: failures, lastFailure: lastFailure, topologyChanged: topologyChanged, trimTarget: remapper.trimTarget, refreshNotice: faderRefresh.notice)
         events.removeAll(keepingCapacity: true)
         omitted = 0
         topologyChanged = false
@@ -271,17 +320,29 @@ final class MIDIProxy: @unchecked Sendable {
             if isMagicFader {
                 EventListTransport.forEachPacket(list) { packet in
                     let words = packetWords(packet)
-                    let repaired = releaseRepair.process(words, enabled: releaseRepairEnabled)
+                    let refresh = faderRefresh.hardware(words, enabled: refreshEnabled,
+                        now: ProcessInfo.processInfo.systemUptime)
+                    let repaired = releaseRepair.process(refresh.host, enabled: releaseRepairEnabled)
                     let output = remapper.process(repaired.words, enabled: recRemapEnabled, trimEnabled: trimRemapEnabled)
                     if output != words {
                         EventListTransport.sendWords(words, timestamp: packet.pointee.timeStamp) {
-                            record($0, direction: "Controller → HUI-RM [入力]", status: noErr)
+                            record($0, direction: refresh.host != words ? "Controller → HUI-RM [リフレッシュ入力]" : "Controller → HUI-RM [入力]", status: noErr)
                             return noErr
                         }
                     }
                     let result = sendToHost(output, timestamp: packet.pointee.timeStamp,
                         direction: output == words ? "Controller → Pro Tools" : "HUI-RM → Pro Tools [変換後]")
-                    if result == noErr { repaired.tickets.forEach { scheduleRelease($0) } }
+                    sendToController(refresh.device, timestamp: 0, direction: "HUI-RM → Controller [フェーダーリフレッシュ 約5％]")
+                    startRefreshTimer()
+                    if result == noErr {
+                        repaired.tickets.forEach { scheduleRelease($0) }
+                        sendToController(remapper.takeFaderLEDFeedback(enabled: recRemapEnabled), timestamp: 0,
+                                         direction: "HUI-RM → Controller [Recタッチ表示]")
+                        if trimRemapEnabled {
+                            sendToController(remapper.trimLEDUpdate(), timestamp: 0,
+                                             direction: "HUI-RM → Controller [Trimランプ即時反映]")
+                        }
+                    }
                 }
                 return
             }
@@ -323,14 +384,15 @@ final class MIDIProxy: @unchecked Sendable {
             var changed = false
             EventListTransport.forEachPacket(list) { packet in
                 let words = packetWords(packet)
-                let output = remapper.processFeedback(words, enabled: recRemapEnabled)
+                if isMagicFader { faderRefresh.feedback(words, now: ProcessInfo.processInfo.systemUptime) }
+                let output = remapper.processFeedback(words, enabled: recRemapEnabled, trimEnabled: trimRemapEnabled && isMagicFader)
                 changed = changed || words != output
                 packets.append((packet.pointee.timeStamp, output))
             }
             if changed {
                 record(list, direction: "Pro Tools → HUI-RM [入力]", status: noErr)
                 for (timestamp, words) in packets where !words.isEmpty {
-                    sendToController(words, timestamp: timestamp, direction: "HUI-RM → Controller [Recランプ反映]")
+                    sendToController(words, timestamp: timestamp, direction: "HUI-RM → Controller [Rec/Trimランプ反映]")
                 }
                 return
             }

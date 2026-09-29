@@ -45,9 +45,9 @@ struct ContentView: View {
                     }
                     HStack(spacing: 24) {
                         Toggle("Rec → Touch / Read", isOn: $model.recRemapEnabled)
-                        Toggle("メトロノーム → Trim", isOn: $model.trimRemapEnabled)
+                        Toggle("録音ボタン → Trim", isOn: $model.trimRemapEnabled)
                     }.toggleStyle(.switch).fixedSize()
-                    Text("それぞれのON／OFFを記憶します。メトロノームの変換はMagic Fader専用です。")
+                    Text("それぞれのON／OFFを記憶します。録音ボタンの変換はMagic Fader専用です。")
                         .font(.caption).foregroundStyle(.secondary)
                     if model.isMagicFader && model.trimRemapEnabled {
                         Text(model.trimTarget.map { "Trim対象: HUIチャンネル \($0)" }
@@ -68,6 +68,16 @@ struct ContentView: View {
                         .toggleStyle(.switch)
                         .disabled(!model.isConnected || !model.isMagicFader)
                     Text("Soloを押したチャンネルに自動で追従します。ON／OFFは次回起動時も保持されます。RecのRemapとは独立した設定です。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }.padding(8)
+            }
+            GroupBox("MG フェーダーリフレッシュ（試験機能）") {
+                VStack(alignment: .leading, spacing: 6) {
+                    Toggle("メトロノーム → リフレッシュ", isOn: $model.refreshEnabled)
+                        .toggleStyle(.switch)
+                        .disabled(!model.isConnected || !model.isMagicFader)
+                    Text(model.refreshNotice).font(.callout)
+                    Text("停止中・手を離して試してください。約5％動かし、100ms後に戻します。途中で触るかPTから位置が届くと復帰を中止。ON／OFFは次回起動時も保持されます。")
                         .font(.caption).foregroundStyle(.secondary)
                 }.padding(8)
             }
@@ -106,6 +116,6 @@ struct ContentView: View {
                 .font(.caption).foregroundStyle(.secondary)
         }
         .padding(20)
-        .frame(minWidth: 840, minHeight: 600)
+        .frame(minWidth: 840, minHeight: 760)
     }
 }

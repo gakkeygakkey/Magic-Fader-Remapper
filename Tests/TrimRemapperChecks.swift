@@ -3,22 +3,22 @@ import Foundation
 @main
 struct TrimRemapperChecks {
     static func main() {
-        let click: [UInt32] = [0x20B00F15, 0x20B02F40, 0x20B00F15, 0x20B02F00]
+        let click: [UInt32] = [0x20B00F0E, 0x20B02F45, 0x20B00F0E, 0x20B02F05]
         for zone in UInt32(0)..<8 {
             var r = RecAutomationRemapper()
             let feedback: [UInt32] = [0x20B00C00 | zone, 0x20B02C41]
             assert(r.processFeedback(feedback, enabled: false) == feedback)
             assert(r.trimTarget == UInt8(zone))
-            let expected: [UInt32] = [0x20B00F15, 0x20B00F18, 0x20B02F40,
+            let expected: [UInt32] = [0x20B00F0E, 0x20B00F18, 0x20B02F40,
                 0x20B00F00 | zone, 0x20B02F44, 0x20B00F00 | zone, 0x20B02F04,
-                0x20B00F18, 0x20B02F00, 0x20B00F15, 0x20B00F15]
+                0x20B00F18, 0x20B02F00, 0x20B00F0E, 0x20B00F0E]
             assert(r.process(click, enabled: true, trimEnabled: true) == expected)
             assert(r.process(click, enabled: true, trimEnabled: true) == expected)
             assert(r.process(click, enabled: false, trimEnabled: false) == click)
             assert(r.process(click, enabled: true) == click) // other hardware
             _ = r.processFeedback([0x20B02C01], enabled: true)
             assert(r.trimTarget == nil)
-            assert(r.process(click, enabled: true, trimEnabled: true) == [0x20B00F15, 0x20B00F15])
+            assert(r.process(click, enabled: true, trimEnabled: true) == [0x20B00F0E, 0x20B00F0E])
         }
         // Every independent Rec/Trim combination, including original Rec LED passthrough.
         for recOn in [false, true] {
@@ -41,11 +41,11 @@ struct TrimRemapperChecks {
         assert(r.trimTarget == nil) // ambiguous, no fallback
         _ = r.processFeedback([0x20B00C03, 0x20B02C01], enabled: true)
         assert(r.trimTarget == 6)
-        _ = r.process([0x20B00F15], enabled: true, trimEnabled: true)
-        let mapped = r.process([0x20B02F40], enabled: true, trimEnabled: true)
+        _ = r.process([0x20B00F0E], enabled: true, trimEnabled: true)
+        let mapped = r.process([0x20B02F45], enabled: true, trimEnabled: true)
         assert(mapped.contains(0x20B00F06))
-        assert(r.process([0x20B02F40], enabled: true, trimEnabled: true).isEmpty)
-        assert(r.process([0x20B02F00], enabled: false, trimEnabled: true).isEmpty)
+        assert(r.process([0x20B02F45], enabled: true, trimEnabled: true) == mapped)
+        assert(r.process([0x20B02F05], enabled: false, trimEnabled: true).isEmpty)
         _ = r.process([0x20B00F0A, 0x20B02F41], enabled: true, trimEnabled: true)
         assert(r.trimTarget == nil)
         let opaque: [UInt32] = [0x30160000, 0x20B02F40, 0x21B02F40, 0x20B12F40]
@@ -69,7 +69,8 @@ struct TrimRemapperChecks {
                 assert(lamps.processFeedback([z, 0x20B02C00 | value], enabled: true).last == 0x20B02C07)
             }
             for value: UInt32 in [0x44, 0x64, 0x44, 0x64] {
-                assert(lamps.processFeedback([z, 0x20B02C00 | value], enabled: true).last == 0x20B02C47)
+                let expected: UInt32 = value == 0x44 ? 0x20B02C47 : 0x20B02C07
+                assert(lamps.processFeedback([z, 0x20B02C00 | value], enabled: true).last == expected)
             }
             // Ordinary Touch blinking remains red/on, dark/off.
             assert(lamps.processFeedback([z, 0x20B02C04], enabled: true).last == 0x20B02C07)

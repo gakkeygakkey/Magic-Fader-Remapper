@@ -18,7 +18,7 @@ struct HUIRMApp: App {
             }
             Divider()
             Toggle("Rec → Touch / Read", isOn: $model.recRemapEnabled)
-            Toggle("メトロノーム → Trim", isOn: $model.trimRemapEnabled)
+            Toggle("録音ボタン → Trim", isOn: $model.trimRemapEnabled)
             Button("HUI-RMを終了") {
                 model.shutdown()
                 NSApp.terminate(nil)
@@ -27,7 +27,7 @@ struct HUIRMApp: App {
         Window("HUI-RM — 接続とMIDI Monitor", id: "monitor") {
             ContentView(model: model)
         }
-        .defaultSize(width: 920, height: 650)
+        .defaultSize(width: 920, height: 820)
         .defaultLaunchBehavior(.suppressed)
         .windowResizability(.contentMinSize)
     }
