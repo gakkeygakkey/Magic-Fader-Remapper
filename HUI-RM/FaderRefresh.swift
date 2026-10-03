@@ -105,6 +105,14 @@ struct FaderRefresh {
         }
     }
 
+    /// A new fader assignment must not reuse cached track-volume positions.
+    mutating func assignmentChanged() {
+        highs.removeAll()
+        positions.removeAll()
+        run = nil
+        notice = "割り当て変更：新しい位置通知を待機"
+    }
+
     mutating func tick(now: TimeInterval) -> [UInt32] {
         guard let current = run, now >= current.due else { return [] }
         run = nil

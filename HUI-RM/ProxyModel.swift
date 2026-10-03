@@ -54,6 +54,32 @@ final class ProxyModel: ObservableObject {
     }
     @Published private(set) var refreshNotice = "停止・位置通知を待機"
 
+    @Published var loopFlipEnabled = false {
+        didSet {
+            UserDefaults.standard.set(loopFlipEnabled, forKey: "MagicFaderLoopFlipEnabled")
+            proxy.setLoopFlip(loopFlipEnabled)
+        }
+    }
+    @Published var transportSendEnabled = false {
+        didSet {
+            UserDefaults.standard.set(transportSendEnabled, forKey: "MagicFaderTransportSendEnabled")
+            proxy.setTransportSend(transportSendEnabled)
+        }
+    }
+    @Published var restoreSendEnabled = false {
+        didSet {
+            UserDefaults.standard.set(restoreSendEnabled, forKey: "MagicFaderRestoreSendEnabled")
+            proxy.setRestoreSend(restoreSendEnabled)
+        }
+    }
+    @Published private(set) var flipLamp = "PT Flipランプ：未受信"
+    @Published private(set) var flipNotice = "未操作"
+
+    func toggleFlip() {
+        proxy.toggleFlip()
+        poll()
+    }
+
     @Published var recording = false {
         didSet { proxy.setRecording(recording) }
     }
@@ -86,6 +112,12 @@ final class ProxyModel: ObservableObject {
         proxy.setReleaseRepair(releaseRepairEnabled)
         refreshEnabled = defaults.bool(forKey: Self.refreshPreferenceKey)
         proxy.setRefresh(refreshEnabled)
+        loopFlipEnabled = defaults.bool(forKey: "MagicFaderLoopFlipEnabled")
+        proxy.setLoopFlip(loopFlipEnabled)
+        restoreSendEnabled = defaults.bool(forKey: "MagicFaderRestoreSendEnabled")
+        proxy.setRestoreSend(restoreSendEnabled)
+        transportSendEnabled = defaults.bool(forKey: "MagicFaderTransportSendEnabled")
+        proxy.setTransportSend(transportSendEnabled)
         start()
         timer = Timer.publish(every: 0.25, on: .main, in: .common).autoconnect().sink { [weak self] _ in
             self?.poll()
@@ -189,7 +221,7 @@ final class ProxyModel: ObservableObject {
     }
 
     func copyLog() {
-        let header = "HUI-RM Phase 2 | Rec → Touch / Read; Transport Record → Trim; Click → Refresh (optional) | UMP hexadecimal | retained \(log.count), omitted \(omitted) | timestamp: CoreMIDI host ticks\n"
+        let header = "HUI-RM Phase 2 | Rec → Touch / Read; Transport Record → Trim; Click → Refresh (optional); Flip / optional Send restore | UMP hexadecimal | retained \(log.count), omitted \(omitted) | timestamp: CoreMIDI host ticks\n"
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(header + log.map(\.line).joined(separator: "\n"), forType: .string)
     }
@@ -206,6 +238,8 @@ final class ProxyModel: ObservableObject {
             refresh()
             nextEndpointScan = ProcessInfo.processInfo.systemUptime + 2
         }
+        flipLamp = snapshot.flipLamp
+        flipNotice = snapshot.flipNotice
         refreshNotice = snapshot.refreshNotice
         trimTarget = snapshot.trimTarget.map { Int($0) + 1 }
         toHost = snapshot.toHost

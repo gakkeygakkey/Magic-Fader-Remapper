@@ -39,6 +39,15 @@ final class MIDIProxy: @unchecked Sendable {
     private var isMagicFader = false
     private var refreshEnabled = false
     private var faderRefresh = FaderRefresh()
+    private var flipReplay = FlipFeedbackReplay()
+    private var transportSend = TransportSendRouting()
+    private var transportSendEnabled = false
+    private var sendSelection = SendSelectionMemory()
+    private var restoreSendEnabled = false
+    private var sendFlip = SendFlip()
+    private var loopFlip = LoopFlipRouting()
+    private var loopFlipEnabled = false
+    private var scheduledLoopLED: UUID?
     private var refreshTimerRunning = false
     private let releaseQueue = DispatchQueue(label: "HUI-RM.SoloRelease")
     private var recording = false
@@ -61,6 +70,8 @@ final class MIDIProxy: @unchecked Sendable {
         let topologyChanged: Bool
         let trimTarget: UInt8?
         let refreshNotice: String
+        let flipLamp: String
+        let flipNotice: String
     }
 
     @MainActor
@@ -168,6 +179,16 @@ final class MIDIProxy: @unchecked Sendable {
                              direction: "HUI-RM → Controller [リフレッシュ終了・復帰]")
         }
         faderRefresh = FaderRefresh()
+        if loopFlipEnabled, isMagicFader, hardwareDestination != 0, outputPort != 0 {
+            sendToController(loopFlip.sync(enabled: false, active: nil, force: true), timestamp: 0,
+                             direction: "HUI-RM → Controller [Loopランプ復元]")
+        }
+        flipReplay = FlipFeedbackReplay()
+        transportSend = TransportSendRouting()
+        sendSelection.resetRoute()
+        sendFlip = SendFlip()
+        loopFlip = LoopFlipRouting()
+        scheduledLoopLED = nil
         refreshTimerRunning = false
         inputPort = 0
         hardwareSource = 0
@@ -237,6 +258,140 @@ final class MIDIProxy: @unchecked Sendable {
         }
     }
 
+    func setLoopFlip(_ enabled: Bool) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard loopFlipEnabled != enabled else { return }
+        loopFlipEnabled = enabled
+        if !enabled { sendFlip.cancelRestore() }
+        if isMagicFader, hardwareDestination != 0, outputPort != 0 {
+            sendToController(loopFlip.sync(enabled: enabled, active: sendFlip.flipActive, force: true), timestamp: 0,
+                             direction: "HUI-RM → Controller [Loopランプ同期/復元]")
+        }
+    }
+
+    func setTransportSend(_ enabled: Bool) {
+        lock.lock()
+        defer { lock.unlock() }
+        transportSendEnabled = enabled
+    }
+
+    func setRestoreSend(_ enabled: Bool) {
+        lock.lock()
+        defer { lock.unlock() }
+        restoreSendEnabled = enabled
+        if !enabled { sendFlip.cancelRestore() }
+    }
+
+    func toggleFlip() {
+        lock.lock()
+        defer { lock.unlock() }
+        requestFlip()
+    }
+
+    // Caller owns lock; shared by the UI and the physical Loop button.
+    private func requestFlip() {
+        guard isMagicFader, hardwareSource != 0, hardwareDestination != 0,
+              virtualSource != 0, outputPort != 0 else { return }
+        let words = sendFlip.request(now: ProcessInfo.processInfo.systemUptime,
+                                     restorePort: restoreSendEnabled ? sendSelection.port : nil)
+        guard !words.isEmpty else { return }
+        if let id = sendFlip.pendingFlipID {
+            faderRefresh.assignmentChanged()
+            flipReplay.cancel()
+            if sendToHost(words, direction: "HUI-RM → Pro Tools [前回のセンド選択]") != noErr {
+                sendFlip.sendFailed()
+            } else {
+                scheduleRestoredFlip(id, generation: generation)
+            }
+            return
+        }
+        sendFlipCommand(words)
+    }
+
+    private func scheduleRestoredFlip(_ id: UUID, generation token: Int) {
+        releaseQueue.asyncAfter(deadline: .now() + .milliseconds(200)) { [weak self] in
+            guard let self else { return }
+            self.lock.lock()
+            defer { self.lock.unlock() }
+            guard self.generation == token, self.restoreSendEnabled, self.isMagicFader,
+                  self.hardwareSource != 0, self.hardwareDestination != 0,
+                  self.virtualSource != 0, self.outputPort != 0 else { return }
+            let words = self.sendFlip.takeRestoredFlip(id, now: ProcessInfo.processInfo.systemUptime)
+            if !words.isEmpty { self.sendFlipCommand(words) }
+        }
+    }
+
+    private func sendFlipCommand(_ words: [UInt32]) {
+        // Cancel an old motor return before PT changes the faders' assignment.
+        faderRefresh.assignmentChanged()
+        let replayID = flipReplay.begin(now: ProcessInfo.processInfo.systemUptime)
+        if sendToHost(words, direction: "HUI-RM → Pro Tools [Flip切替・再選択なし]") != noErr {
+            sendFlip.sendFailed()
+            flipReplay.cancel()
+        } else {
+            scheduleFlipReplay(replayID, generation: generation, delay: 150)
+            if let id = sendFlip.pendingPanID { schedulePanReturn(id, generation: generation) }
+        }
+    }
+
+    private func schedulePanReturn(_ id: UUID, generation token: Int) {
+        // Let the existing position replay finish before changing the V-Pot display.
+        releaseQueue.asyncAfter(deadline: .now() + .milliseconds(550)) { [weak self] in
+            guard let self else { return }
+            self.lock.lock()
+            defer { self.lock.unlock() }
+            guard self.generation == token, self.isMagicFader, self.hardwareSource != 0,
+                  self.hardwareDestination != 0, self.virtualSource != 0, self.outputPort != 0 else { return }
+            let words = self.sendFlip.takePan(id, now: ProcessInfo.processInfo.systemUptime)
+            guard !words.isEmpty else { return }
+            let replayID = self.flipReplay.begin(now: ProcessInfo.processInfo.systemUptime)
+            if self.sendToHost(words, direction: "HUI-RM → Pro Tools [Flip解除後Pan選択]") != noErr {
+                self.sendFlip.sendFailed()
+                self.flipReplay.cancel()
+            } else {
+                self.scheduleFlipReplay(replayID, generation: token, delay: 150)
+            }
+        }
+    }
+
+    private func scheduleFlipReplay(_ id: UUID, generation token: Int, delay: Int) {
+        releaseQueue.asyncAfter(deadline: .now() + .milliseconds(delay)) { [weak self] in
+            guard let self else { return }
+            self.lock.lock()
+            defer { self.lock.unlock() }
+            guard self.generation == token, self.isMagicFader, self.hardwareDestination != 0,
+                  self.outputPort != 0, self.flipReplay.id == id else { return }
+            if self.sendFlip.isTouched { self.flipReplay.cancel(); return }
+            let direction = self.flipReplay.isSendChange
+                ? "HUI-RM → Controller [Flip中センド変更・表示位置再送]"
+                : "HUI-RM → Controller [Flip表示・位置再送]"
+            let words = self.flipReplay.next(id, now: ProcessInfo.processInfo.systemUptime)
+            if !words.isEmpty {
+                self.sendToController(words, timestamp: 0, direction: direction)
+            }
+            if self.flipReplay.id == id {
+                self.scheduleFlipReplay(id, generation: token, delay: 20)
+            }
+        }
+    }
+
+    private func scheduleLoopLED() {
+        guard loopFlipEnabled, isMagicFader, let id = loopFlip.pendingID,
+              id != scheduledLoopLED else { return }
+        scheduledLoopLED = id
+        let token = generation
+        releaseQueue.asyncAfter(deadline: .now() + .milliseconds(100)) { [weak self] in
+            guard let self else { return }
+            self.lock.lock()
+            defer { self.lock.unlock() }
+            guard self.generation == token, self.loopFlipEnabled, self.isMagicFader,
+                  self.hardwareDestination != 0, self.outputPort != 0 else { return }
+            let words = self.loopFlip.takeLED(id, now: ProcessInfo.processInfo.systemUptime)
+            self.sendToController(words, timestamp: 0, direction: "HUI-RM → Controller [Loopランプ・100ms後単独]")
+        }
+    }
+
     private func startRefreshTimer() {
         guard faderRefresh.active, !refreshTimerRunning else { return }
         refreshTimerRunning = true
@@ -270,6 +425,7 @@ final class MIDIProxy: @unchecked Sendable {
 
     @discardableResult
     private func sendToHost(_ words: [UInt32], timestamp: MIDITimeStamp = 0, direction: String) -> OSStatus {
+        sendFlip.observeHost(words)
         var failure: OSStatus = noErr
         EventListTransport.sendWords(words, timestamp: timestamp) { output in
             let result = EventListTransport.withSourceTimestamps(output) {
@@ -304,7 +460,7 @@ final class MIDIProxy: @unchecked Sendable {
             sendToController(remapper.trimLEDUpdate(), timestamp: 0, direction: "HUI-RM → Controller [Trimランプ反映]")
         }
         let value = Snapshot(events: events, omitted: omitted, toHost: toHost, toDevice: toDevice,
-                             failures: failures, lastFailure: lastFailure, topologyChanged: topologyChanged, trimTarget: remapper.trimTarget, refreshNotice: faderRefresh.notice)
+                             failures: failures, lastFailure: lastFailure, topologyChanged: topologyChanged, trimTarget: remapper.trimTarget, refreshNotice: faderRefresh.notice, flipLamp: sendFlip.lampText, flipNotice: sendFlip.notice)
         events.removeAll(keepingCapacity: true)
         omitted = 0
         topologyChanged = false
@@ -320,13 +476,21 @@ final class MIDIProxy: @unchecked Sendable {
             if isMagicFader {
                 EventListTransport.forEachPacket(list) { packet in
                     let words = packetWords(packet)
-                    let refresh = faderRefresh.hardware(words, enabled: refreshEnabled,
+                    let routed = transportSend.process(words, enabled: transportSendEnabled, currentPort: sendSelection.port)
+                    sendSelection.observe(routed)
+                    sendFlip.observeRestoreInteraction(words)
+                    let sendReplayID = flipReplay.hardware(routed,
+                        flipActive: sendFlip.flipActive == true && !sendFlip.isTouched,
                         now: ProcessInfo.processInfo.systemUptime)
-                    let repaired = releaseRepair.process(refresh.host, enabled: releaseRepairEnabled)
+                    if sendReplayID != nil { faderRefresh.assignmentChanged() }
+                    let refresh = faderRefresh.hardware(routed, enabled: refreshEnabled,
+                        now: ProcessInfo.processInfo.systemUptime)
+                    let loop = loopFlip.hardware(refresh.host, enabled: loopFlipEnabled)
+                    let repaired = releaseRepair.process(loop.words, enabled: releaseRepairEnabled)
                     let output = remapper.process(repaired.words, enabled: recRemapEnabled, trimEnabled: trimRemapEnabled)
                     if output != words {
                         EventListTransport.sendWords(words, timestamp: packet.pointee.timeStamp) {
-                            record($0, direction: refresh.host != words ? "Controller → HUI-RM [リフレッシュ入力]" : "Controller → HUI-RM [入力]", status: noErr)
+                            record($0, direction: routed != words ? "Controller → HUI-RM [巻戻し/早送り → センド入力]" : loop.words != refresh.host ? "Controller → HUI-RM [Loop → Flip入力]" : (refresh.host != words ? "Controller → HUI-RM [リフレッシュ入力]" : "Controller → HUI-RM [入力]"), status: noErr)
                             return noErr
                         }
                     }
@@ -334,7 +498,10 @@ final class MIDIProxy: @unchecked Sendable {
                         direction: output == words ? "Controller → Pro Tools" : "HUI-RM → Pro Tools [変換後]")
                     sendToController(refresh.device, timestamp: 0, direction: "HUI-RM → Controller [フェーダーリフレッシュ 約5％]")
                     startRefreshTimer()
+                    if result != noErr, sendReplayID != nil { flipReplay.cancel() }
                     if result == noErr {
+                        if let id = sendReplayID { scheduleFlipReplay(id, generation: generation, delay: 150) }
+                        for _ in 0..<loop.presses { requestFlip() }
                         repaired.tickets.forEach { scheduleRelease($0) }
                         sendToController(remapper.takeFaderLEDFeedback(enabled: recRemapEnabled), timestamp: 0,
                                          direction: "HUI-RM → Controller [Recタッチ表示]")
@@ -384,15 +551,21 @@ final class MIDIProxy: @unchecked Sendable {
             var changed = false
             EventListTransport.forEachPacket(list) { packet in
                 let words = packetWords(packet)
-                if isMagicFader { faderRefresh.feedback(words, now: ProcessInfo.processInfo.systemUptime) }
-                let output = remapper.processFeedback(words, enabled: recRemapEnabled, trimEnabled: trimRemapEnabled && isMagicFader)
+                if isMagicFader {
+                    flipReplay.feedback(words, now: ProcessInfo.processInfo.systemUptime)
+                    sendFlip.observeFeedback(words)
+                    faderRefresh.feedback(words, now: ProcessInfo.processInfo.systemUptime)
+                }
+                let remapped = remapper.processFeedback(words, enabled: recRemapEnabled, trimEnabled: trimRemapEnabled && isMagicFader)
+                let output = isMagicFader ? loopFlip.feedback(remapped, enabled: loopFlipEnabled, active: sendFlip.flipActive) : remapped
+                scheduleLoopLED()
                 changed = changed || words != output
                 packets.append((packet.pointee.timeStamp, output))
             }
             if changed {
                 record(list, direction: "Pro Tools → HUI-RM [入力]", status: noErr)
                 for (timestamp, words) in packets where !words.isEmpty {
-                    sendToController(words, timestamp: timestamp, direction: "HUI-RM → Controller [Rec/Trimランプ反映]")
+                    sendToController(words, timestamp: timestamp, direction: "HUI-RM → Controller [Rec/Trim/Loopランプ反映]")
                 }
                 return
             }

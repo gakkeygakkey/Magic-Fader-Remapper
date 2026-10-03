@@ -81,6 +81,33 @@ struct ContentView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }.padding(8)
             }
+            GroupBox("MG Flip（試験機能）") {
+                VStack(alignment: .leading, spacing: 6) {
+                    Toggle("ループ → Flip", isOn: $model.loopFlipEnabled)
+                        .toggleStyle(.switch)
+                        .disabled(!model.isConnected || !model.isMagicFader)
+                    Text("ON／OFFを記憶します。ON時はループランプがFlip中に点灯。OFF時は通常のループ操作・表示に戻ります。")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Toggle("巻き戻し／早送り → センド切替", isOn: $model.transportSendEnabled)
+                        .toggleStyle(.switch)
+                    Text("ON時はFlip状態に関係なく、巻き戻しで前、早送りで次のセンドへ。A〜Eを循環します。停止はそのまま。設定を記憶します。")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Toggle("前回のセンドを復元", isOn: $model.restoreSendEnabled)
+                        .toggleStyle(.switch)
+                        .padding(.leading, 16)
+                    Text("ON時は最後に本体で選んだセンドをFlip時に復元します。未選択ならA。設定とセンドは再起動後も保持します。")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .padding(.leading, 16)
+                    HStack {
+                        Button("Flip切替") { model.toggleFlip() }
+                            .disabled(!model.isConnected || !model.isMagicFader)
+                        Text(model.flipLamp).font(.callout)
+                    }
+                    Text(model.flipNotice).font(.caption).foregroundStyle(.secondary)
+                    Text("MGで対象のセンドを選び、手を離して操作。もう一度押すと戻ります。Flip中はMuteもセンド側に切り替わります。PTランプの点滅は表示にも反映されます。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }.padding(8)
+            }
             if let error = model.error {
                 Label(error, systemImage: "exclamationmark.triangle.fill")
                     .foregroundStyle(.orange).textSelection(.enabled)
@@ -116,6 +143,6 @@ struct ContentView: View {
                 .font(.caption).foregroundStyle(.secondary)
         }
         .padding(20)
-        .frame(minWidth: 840, minHeight: 760)
+        .frame(minWidth: 840, minHeight: 880)
     }
 }

@@ -27,7 +27,7 @@ struct HUIRMApp: App {
         Window("HUI-RM — 接続とMIDI Monitor", id: "monitor") {
             ContentView(model: model)
         }
-        .defaultSize(width: 920, height: 820)
+        .defaultSize(width: 920, height: 940)
         .defaultLaunchBehavior(.suppressed)
         .windowResizability(.contentMinSize)
     }
