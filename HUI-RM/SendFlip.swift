@@ -9,7 +9,7 @@ struct SendFlip {
     private(set) var lamp: Bool?
     private(set) var flipActive: Bool?
     private var displayBytes: [UInt8]?
-    private(set) var notice = "未操作"
+    private(set) var notice = NSLocalizedString("Not used yet", comment: "")
     private(set) var pendingPanID: UUID?
     private(set) var pendingFlipID: UUID?
     private var flipDue: TimeInterval = 0
@@ -18,8 +18,8 @@ struct SendFlip {
     var isTouched: Bool { !touched.isEmpty }
 
     var lampText: String {
-        guard let lamp else { return "PT Flipランプ：未受信" }
-        return lamp ? "PT Flipランプ：点灯通知" : "PT Flipランプ：消灯通知"
+        guard let lamp else { return NSLocalizedString("PT Flip LED: No feedback", comment: "") }
+        return lamp ? NSLocalizedString("PT Flip LED: On message", comment: "") : NSLocalizedString("PT Flip LED: Off message", comment: "")
     }
 
     mutating func observeHost(_ words: [UInt32]) {
@@ -61,7 +61,7 @@ struct SendFlip {
     }
 
     mutating func request(now: TimeInterval, restorePort: UInt8? = nil) -> [UInt32] {
-        guard !isTouched else { notice = "フェーダーから手を離してください"; return [] }
+        guard !isTouched else { notice = NSLocalizedString("Take your hand off the fader", comment: ""); return [] }
         guard now >= nextRequestAt else { return [] }
         pendingFlipID = nil
         pendingPanID = flipActive == true ? UUID() : nil
@@ -69,12 +69,12 @@ struct SendFlip {
             pendingFlipID = UUID()
             flipDue = now + 0.2
             nextRequestAt = now + 0.5
-            notice = "前回のセンドを選択：200ms後にFlipを送信"
+            notice = NSLocalizedString("Last send selected: Flip scheduled in 200 ms", comment: "")
             return restoringZone([0x20B00F0B, 0x20B02F40 | UInt32(port), 0x20B00F0B, 0x20B02F00 | UInt32(port)])
         }
         panDue = now + 0.55
         nextRequestAt = now + 0.5
-        notice = "Flipのみ送信しました。PTの表示とフェーダーを確認してください。"
+        notice = NSLocalizedString("Flip toggle sent", comment: "")
         return restoringZone([0x20B00F0C, 0x20B02F43, 0x20B00F0C, 0x20B02F03])
     }
 
@@ -95,7 +95,7 @@ struct SendFlip {
         guard pendingFlipID == id, now >= flipDue else { return [] }
         pendingFlipID = nil
         guard !isTouched, flipActive != true, now <= flipDue + 0.3 else { return [] }
-        notice = "前回のセンドでFlipを送信しました。"
+        notice = NSLocalizedString("Flip toggle sent for the last send", comment: "")
         return restoringZone([0x20B00F0C, 0x20B02F43, 0x20B00F0C, 0x20B02F03])
     }
 
@@ -104,7 +104,7 @@ struct SendFlip {
         pendingPanID = nil
         // Require PT confirmation, not the blinking lamp's dark phase.
         guard flipActive == false, !isTouched, now <= panDue + 0.3 else { return [] }
-        notice = "Flip解除後にPanを選択しました。トラック名を確認してください。"
+        notice = NSLocalizedString("Pan selection sent after exiting Flip", comment: "")
         return restoringZone([0x20B00F0B, 0x20B02F42, 0x20B00F0B, 0x20B02F02])
     }
 
@@ -121,7 +121,7 @@ struct SendFlip {
         lamp = nil
         flipActive = nil
         displayBytes = nil
-        notice = "切替の送信に失敗しました。ログを確認してください。"
+        notice = NSLocalizedString("Could not send the toggle. Check the log.", comment: "")
     }
 
     /// Select/Assign display (zone 8), observed in PT logs: FLIP / SndA.

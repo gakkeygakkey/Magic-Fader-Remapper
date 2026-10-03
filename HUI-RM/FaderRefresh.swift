@@ -22,7 +22,7 @@ struct FaderRefresh {
     private var inputZone: UInt8?
     private var run: Run?
     private var consumedClick = false
-    private(set) var notice = "Pro Toolsの位置通知を待機"
+    private(set) var notice = NSLocalizedString("Waiting for fader position from Pro Tools", comment: "")
     var active: Bool { run != nil }
 
     static func positionWords(zone: UInt8, value: UInt16) -> [UInt32] {
@@ -42,11 +42,11 @@ struct FaderRefresh {
                 if let zone = inputZone, zone < 8, cc == 0x2F {
                     if value == 0x40 {
                         touched.insert(zone)
-                        cancel("中断：フェーダー操作を優先")
+                        cancel(NSLocalizedString("Cancelled: Fader interaction takes priority", comment: ""))
                     } else if value == 0 { touched.remove(zone) }
                 }
                 if inputZone == 0x0A, cc == 0x2F, value & 0x40 != 0 {
-                    cancel("中断：トラック移動を優先")
+                    cancel(NSLocalizedString("Cancelled: Track navigation takes priority", comment: ""))
                 }
                 if inputZone == 0x15, cc == 0x2F {
                     if value == 0, consumedClick { consumedClick = false; return }
@@ -54,16 +54,16 @@ struct FaderRefresh {
                         guard !consumedClick else { return }
                         consumedClick = true
                         guard run == nil else { return }
-                        guard touched.isEmpty else { notice = "フェーダーから手を離してください"; return }
+                        guard touched.isEmpty else { notice = NSLocalizedString("Take your hand off the fader", comment: ""); return }
                         guard let zone = lastSelectedZone else {
-                            notice = "バンク内のトラックを一度選択してください"; return
+                            notice = NSLocalizedString("Select a track within the HUI bank first", comment: ""); return
                         }
-                        guard let position = positions[zone] else { notice = "選択チャンネルの位置通知を待機"; return }
+                        guard let position = positions[zone] else { notice = NSLocalizedString("Waiting for the selected channel’s fader position", comment: ""); return }
                         // About 5% of the 14-bit position range. Move upward near the bottom.
                         let distance: UInt16 = 819
                         let offset = position.value < distance ? position.value + distance : position.value - distance
                         run = Run(position: position, due: now + 0.1)
-                        notice = "リフレッシュ中：約5％移動"
+                        notice = NSLocalizedString("Refreshing: Moving about 5%", comment: "")
                         device = Self.positionWords(zone: position.zone, value: offset)
                         return
                     }
@@ -86,21 +86,21 @@ struct FaderRefresh {
             let cc = UInt8((word >> 8) & 0xFF), value = UInt8(word & 0xFF)
             if cc == 0x0C { feedbackZone = value }
             if let zone = feedbackZone, zone < 8, cc == 0x2C, value == 0x41 {
-                if lastSelectedZone != zone { cancel("中断：トラック選択変更を優先") }
+                if lastSelectedZone != zone { cancel(NSLocalizedString("Cancelled: Track selection takes priority", comment: "")) }
                 lastSelectedZone = zone
                 // MG retains its physical fader target after SELECT turns off.
                 // Neither deselection nor other channels' positions replace it.
             }
             if cc < 8 {
                 highs[cc] = High(value: value, at: now)
-                cancel("Pro Toolsの新しい位置を優先")
+                cancel(NSLocalizedString("New fader position from Pro Tools takes priority", comment: ""))
             } else if (0x20...0x27).contains(cc) {
                 let zone = cc - 0x20
                 if let high = highs.removeValue(forKey: zone), now - high.at <= 0.1 {
                     positions[zone] = Position(zone: zone, value: UInt16(high.value) << 7 | UInt16(value))
-                    if run == nil { notice = "準備完了" }
+                    if run == nil { notice = NSLocalizedString("Ready", comment: "") }
                 }
-                cancel("Pro Toolsの新しい位置を優先")
+                cancel(NSLocalizedString("New fader position from Pro Tools takes priority", comment: ""))
             }
         }
     }
@@ -110,20 +110,20 @@ struct FaderRefresh {
         highs.removeAll()
         positions.removeAll()
         run = nil
-        notice = "割り当て変更：新しい位置通知を待機"
+        notice = NSLocalizedString("Assignment changed: Waiting for a new fader position", comment: "")
     }
 
     mutating func tick(now: TimeInterval) -> [UInt32] {
         guard let current = run, now >= current.due else { return [] }
         run = nil
-        notice = "元の位置へ復帰指示を送信"
+        notice = NSLocalizedString("Return to original position sent", comment: "")
         return Self.positionWords(zone: current.position.zone, value: current.position.value)
     }
 
     mutating func disable(now: TimeInterval) -> [UInt32] {
         guard let current = run else { return [] }
         run = nil
-        notice = "元の位置へ復帰指示を送信"
+        notice = NSLocalizedString("Return to original position sent", comment: "")
         return Self.positionWords(zone: current.position.zone, value: current.position.value)
     }
 

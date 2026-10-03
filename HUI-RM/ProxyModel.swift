@@ -10,7 +10,7 @@ final class ProxyModel: ObservableObject {
     @Published var selectedDestination: MIDIEndpointRef = 0
     @Published private(set) var isReady = false
     @Published private(set) var isConnected = false
-    @Published private(set) var status = "初期化中"
+    @Published private(set) var status = NSLocalizedString("Initializing", comment: "")
     @Published private(set) var error: String?
     @Published private(set) var log: [MonitorEvent] = []
     @Published private(set) var omitted = 0
@@ -33,9 +33,9 @@ final class ProxyModel: ObservableObject {
     }
     private var connectedStatus: String {
         var modes: [String] = []
-        if recRemapEnabled { modes.append("Rec → Touch / Read") }
-        if trimRemapEnabled && isMagicFader { modes.append("録音ボタン → Trim") }
-        return "中継中 · " + (modes.isEmpty ? "Remap OFF" : modes.joined(separator: " · "))
+        if recRemapEnabled { modes.append("Rec Ready → Touch / Read") }
+        if trimRemapEnabled && isMagicFader { modes.append(NSLocalizedString("Transport Record → Trim", comment: "")) }
+        return NSLocalizedString("Routing · ", comment: "") + (modes.isEmpty ? "Remap OFF" : modes.joined(separator: " · "))
     }
     @Published var releaseRepairEnabled = false {
         didSet {
@@ -52,7 +52,7 @@ final class ProxyModel: ObservableObject {
             proxy.setRefresh(refreshEnabled)
         }
     }
-    @Published private(set) var refreshNotice = "停止・位置通知を待機"
+    @Published private(set) var refreshNotice = NSLocalizedString("Waiting for stop and fader position", comment: "")
 
     @Published var loopFlipEnabled = false {
         didSet {
@@ -72,8 +72,8 @@ final class ProxyModel: ObservableObject {
             proxy.setRestoreSend(restoreSendEnabled)
         }
     }
-    @Published private(set) var flipLamp = "PT Flipランプ：未受信"
-    @Published private(set) var flipNotice = "未操作"
+    @Published private(set) var flipLamp = NSLocalizedString("PT Flip LED: No feedback", comment: "")
+    @Published private(set) var flipNotice = NSLocalizedString("Not used yet", comment: "")
 
     func toggleFlip() {
         proxy.toggleFlip()
@@ -128,12 +128,12 @@ final class ProxyModel: ObservableObject {
         do {
             try proxy.start()
             isReady = true
-            status = "コントローラー未接続"
+            status = NSLocalizedString("Controller disconnected", comment: "")
             error = nil
             refresh()
         } catch {
             isReady = false
-            status = "仮想MIDIを作成できません"
+            status = NSLocalizedString("Could not create virtual MIDI ports", comment: "")
             self.error = error.localizedDescription
         }
     }
@@ -143,7 +143,7 @@ final class ProxyModel: ObservableObject {
         destinations = proxy.endpoints(sources: false)
         if isConnected && (!sources.contains { $0.id == connectedSource && $0.uniqueID == connectedSourceUID } || !destinations.contains { $0.id == connectedDestination && $0.uniqueID == connectedDestinationUID }) {
             disconnectRoute()
-            status = "コントローラーが切断されました"
+            status = NSLocalizedString("Controller was disconnected", comment: "")
             nextAutomaticAttempt = 0
         }
         if !sources.contains(where: { $0.id == selectedSource }) { selectedSource = 0 }
@@ -155,7 +155,7 @@ final class ProxyModel: ObservableObject {
         guard isReady, !isConnected, connectionMemory.automaticAllowed,
               let saved = connectionMemory.saved else { return }
         guard let (source, destination) = connectionMemory.candidate(sources: sources, destinations: destinations) else {
-            status = "前回の機器を待機中 · \(saved.sourceName)"
+            status = String(format: NSLocalizedString("Waiting for previous device · %@", comment: ""), saved.sourceName)
             return
         }
         guard ProcessInfo.processInfo.systemUptime >= nextAutomaticAttempt else { return }
@@ -170,7 +170,7 @@ final class ProxyModel: ObservableObject {
         connectionMemory.suspendAutomaticConnection()
         guard let source = sources.first(where: { $0.id == selectedSource }),
               let destination = destinations.first(where: { $0.id == selectedDestination }) else {
-            error = "接続先を選び直してください。"
+            error = NSLocalizedString("Select the input and output devices again.", comment: "")
             return
         }
         establishConnection(source: source, destination: destination)
@@ -187,11 +187,11 @@ final class ProxyModel: ObservableObject {
             isMagicFader = MagicFaderReleaseRepair.matchesDevice(source.name)
             status = connectedStatus
             let remembered = connectionMemory.remember(source: source, destination: destination)
-            error = remembered ? nil : "接続しましたが、機器の識別情報を保存できません。次回は手動で接続してください。"
+            error = remembered ? nil : NSLocalizedString("Connected, but the device identity could not be saved. Connect manually next time.", comment: "")
         } catch {
             isConnected = false
             isMagicFader = false
-            status = "接続できません"
+            status = NSLocalizedString("Connection failed", comment: "")
             self.error = error.localizedDescription
         }
     }
@@ -199,7 +199,7 @@ final class ProxyModel: ObservableObject {
     func disconnect() {
         connectionMemory.suspendAutomaticConnection()
         disconnectRoute()
-        status = "手動で切断 · 自動接続は次回起動まで停止"
+        status = NSLocalizedString("Disconnected manually · Auto-connect paused until next launch", comment: "")
     }
 
     private func disconnectRoute() {
@@ -211,7 +211,7 @@ final class ProxyModel: ObservableObject {
         connectedDestination = 0
         connectedSourceUID = 0
         connectedDestinationUID = 0
-        status = "コントローラー未接続"
+        status = NSLocalizedString("Controller disconnected", comment: "")
     }
 
     func clear() {
@@ -221,7 +221,7 @@ final class ProxyModel: ObservableObject {
     }
 
     func copyLog() {
-        let header = "HUI-RM Phase 2 | Rec → Touch / Read; Transport Record → Trim; Click → Refresh (optional); Flip / optional Send restore | UMP hexadecimal | retained \(log.count), omitted \(omitted) | timestamp: CoreMIDI host ticks\n"
+        let header = "MF-RM Phase 2 | Rec Ready → Touch / Read; Transport Record → Trim; Click → Refresh (optional); Flip / optional Send restore | UMP hexadecimal | retained \(log.count), omitted \(omitted) | timestamp: CoreMIDI host ticks\n"
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(header + log.map(\.line).joined(separator: "\n"), forType: .string)
     }
@@ -245,7 +245,7 @@ final class ProxyModel: ObservableObject {
         toHost = snapshot.toHost
         toDevice = snapshot.toDevice
         if snapshot.failures != failures {
-            error = "MIDI転送エラー: OSStatus \(snapshot.lastFailure)"
+            error = String(format: NSLocalizedString("MIDI routing error: OSStatus %@", comment: ""), String(snapshot.lastFailure))
         }
         failures = snapshot.failures
         if !snapshot.events.isEmpty {

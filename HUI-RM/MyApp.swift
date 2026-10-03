@@ -7,28 +7,31 @@ struct HUIRMApp: App {
     @Environment(\.openWindow) private var openWindow
 
     var body: some Scene {
-        MenuBarExtra("HUI-RM", systemImage: "slider.vertical.3") {
-            Text(model.status)
-            Button("接続とMIDI Monitor…") {
+        MenuBarExtra("MF-RM", systemImage: "slider.vertical.3") {
+            Button(NSLocalizedString("Settings…", comment: "")) {
                 openWindow(id: "monitor")
                 NSApp.activate(ignoringOtherApps: true)
             }
-            if model.isConnected {
-                Button("コントローラーを切断") { model.disconnect() }
-            }
             Divider()
-            Toggle("Rec → Touch / Read", isOn: $model.recRemapEnabled)
-            Toggle("録音ボタン → Trim", isOn: $model.trimRemapEnabled)
-            Button("HUI-RMを終了") {
+            Button(NSLocalizedString("Quit MF-RM", comment: "")) {
                 model.shutdown()
                 NSApp.terminate(nil)
             }.keyboardShortcut("q")
         }
-        Window("HUI-RM — 接続とMIDI Monitor", id: "monitor") {
+        Window(NSLocalizedString("MF-RM — Settings", comment: ""), id: "monitor") {
             ContentView(model: model)
+                .preferredColorScheme(.dark)
         }
-        .defaultSize(width: 920, height: 940)
+        .defaultSize(width: 790, height: 870)
         .defaultLaunchBehavior(.suppressed)
         .windowResizability(.contentMinSize)
+        Window(NSLocalizedString("MF-RM — Diagnostics & MIDI Log", comment: ""), id: "diagnostics") {
+            DiagnosticsView(model: model)
+                .preferredColorScheme(.dark)
+        }
+        .defaultSize(width: 1060, height: 640)
+        .defaultLaunchBehavior(.suppressed)
+        .windowResizability(.contentMinSize)
+
     }
 }

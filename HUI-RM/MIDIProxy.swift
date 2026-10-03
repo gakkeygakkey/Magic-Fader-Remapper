@@ -13,8 +13,8 @@ struct MonitorEvent: Identifiable {
     var line: String {
         let time = date.formatted(.dateTime.hour().minute().second().secondFraction(.fractional(3)))
         let data = words.map { String(format: "%08X", $0) }.joined(separator: " ")
-        let suffix = totalWords > words.count ? " … [表示省略: 全\(totalWords) words]" : ""
-        let result = status == noErr ? "" : " [未転送 / OSStatus \(status)]"
+        let suffix = totalWords > words.count ? String(format: NSLocalizedString(" … [truncated: %@ words total]", comment: ""), String(totalWords)) : ""
+        let result = status == noErr ? "" : String(format: NSLocalizedString(" [not forwarded / OSStatus %@]", comment: ""), String(status))
         return "\(time)  \(direction)  t=\(timestamp)  \(data)\(suffix)\(result)"
     }
 }
@@ -49,7 +49,7 @@ final class MIDIProxy: @unchecked Sendable {
     private var loopFlipEnabled = false
     private var scheduledLoopLED: UUID?
     private var refreshTimerRunning = false
-    private let releaseQueue = DispatchQueue(label: "HUI-RM.SoloRelease")
+    private let releaseQueue = DispatchQueue(label: "MF-RM.SoloRelease")
     private var recording = false
     private var events: [MonitorEvent] = []
     private var omitted = 0
@@ -78,19 +78,19 @@ final class MIDIProxy: @unchecked Sendable {
     func start() throws {
         guard client == 0 else { return }
         do {
-            try check(MIDIClientCreateWithBlock("HUI-RM" as CFString, &client) { [weak self] _ in
+            try check(MIDIClientCreateWithBlock("MF-RM" as CFString, &client) { [weak self] _ in
                 guard let self else { return }
                 self.lock.lock()
                 self.topologyChanged = true
                 self.lock.unlock()
-            }, "MIDIクライアント作成")
-            try check(MIDISourceCreateWithProtocol(client, "HUI-RM" as CFString, ._1_0, &virtualSource), "仮想入力作成")
+            }, NSLocalizedString("Create MIDI client", comment: ""))
+            try check(MIDISourceCreateWithProtocol(client, "MF-RM" as CFString, ._1_0, &virtualSource), NSLocalizedString("Create virtual input", comment: ""))
             try restoreID(virtualSource, key: "VirtualSourceID")
-            try check(MIDIDestinationCreateWithProtocol(client, "HUI-RM" as CFString, ._1_0, &virtualDestination) { [weak self] list, _ in
+            try check(MIDIDestinationCreateWithProtocol(client, "MF-RM" as CFString, ._1_0, &virtualDestination) { [weak self] list, _ in
                 self?.forward(list, fromHardware: false)
-            }, "仮想出力作成")
+            }, NSLocalizedString("Create virtual output", comment: ""))
             try restoreID(virtualDestination, key: "VirtualDestinationID")
-            try check(MIDIOutputPortCreate(client, "To Controller" as CFString, &outputPort), "MIDI出力作成")
+            try check(MIDIOutputPortCreate(client, "To Controller" as CFString, &outputPort), NSLocalizedString("Create MIDI output", comment: ""))
         } catch {
             stop()
             throw error
@@ -104,10 +104,10 @@ final class MIDIProxy: @unchecked Sendable {
         if saved != 0 {
             // Do not silently change identity on collision: the user's DAW routing
             // would otherwise refer to a different endpoint.
-            try check(MIDIObjectSetIntegerProperty(endpoint, kMIDIPropertyUniqueID, saved), "仮想MIDI IDの復元（重複時は他のHUI-RMを終了してください）")
+            try check(MIDIObjectSetIntegerProperty(endpoint, kMIDIPropertyUniqueID, saved), NSLocalizedString("Restore virtual MIDI ID (if duplicated, quit other MF-RM instances)", comment: ""))
         }
         var actual: Int32 = 0
-        try check(MIDIObjectGetIntegerProperty(endpoint, kMIDIPropertyUniqueID, &actual), "仮想MIDI IDの取得")
+        try check(MIDIObjectGetIntegerProperty(endpoint, kMIDIPropertyUniqueID, &actual), NSLocalizedString("Read virtual MIDI ID", comment: ""))
         defaults.set(Int(actual), forKey: key)
     }
 
@@ -137,7 +137,7 @@ final class MIDIProxy: @unchecked Sendable {
         guard client != 0,
               endpoints(sources: true).contains(where: { $0.id == source }),
               endpoints(sources: false).contains(where: { $0.id == destination }) else {
-            throw ProxyError(message: "接続先が見つかりません。一覧を更新してください。")
+            throw ProxyError(message: NSLocalizedString("The selected device was not found. Refresh the device list.", comment: ""))
         }
         // Each input port captures its connection generation. A late callback from
         // an old device must never be delivered through a newly selected route.
@@ -148,7 +148,7 @@ final class MIDIProxy: @unchecked Sendable {
         var port: MIDIPortRef = 0
         try check(MIDIInputPortCreateWithProtocol(client, "From Controller" as CFString, ._1_0, &port) { [weak self] list, _ in
             self?.forward(list, fromHardware: true, generation: token)
-        }, "MIDI入力作成")
+        }, NSLocalizedString("Create MIDI input", comment: ""))
         lock.lock()
         inputPort = port
         isMagicFader = endpoints(sources: true).first(where: { $0.id == source }).map { MagicFaderReleaseRepair.matchesDevice($0.name) } ?? false
@@ -158,7 +158,7 @@ final class MIDIProxy: @unchecked Sendable {
         let status = MIDIPortConnectSource(port, source, nil)
         if status != noErr {
             disconnect()
-            try check(status, "コントローラー接続")
+            try check(status, NSLocalizedString("Connect controller", comment: ""))
         }
     }
 
@@ -169,19 +169,19 @@ final class MIDIProxy: @unchecked Sendable {
         let source = hardwareSource
         if recRemapEnabled, hardwareDestination != 0, outputPort != 0 {
             let restore = remapper.modeChanged(enabled: false)
-            if !restore.isEmpty { sendToController(restore, timestamp: 0, direction: "HUI-RM → Controller [Recランプ復元]") }
+            if !restore.isEmpty { sendToController(restore, timestamp: 0, direction: NSLocalizedString("MF-RM → Controller [Rec Ready LED restore]", comment: "")) }
         }
         if trimRemapEnabled, isMagicFader, hardwareDestination != 0, outputPort != 0 {
-            sendToController(remapper.trimModeChanged(enabled: false), timestamp: 0, direction: "HUI-RM → Controller [録音ランプ復元]")
+            sendToController(remapper.trimModeChanged(enabled: false), timestamp: 0, direction: NSLocalizedString("MF-RM → Controller [Record LED restore]", comment: ""))
         }
         if isMagicFader, hardwareDestination != 0, outputPort != 0 {
             sendToController(faderRefresh.disable(now: ProcessInfo.processInfo.systemUptime), timestamp: 0,
-                             direction: "HUI-RM → Controller [リフレッシュ終了・復帰]")
+                             direction: NSLocalizedString("MF-RM → Controller [Refresh ended; return]", comment: ""))
         }
         faderRefresh = FaderRefresh()
         if loopFlipEnabled, isMagicFader, hardwareDestination != 0, outputPort != 0 {
             sendToController(loopFlip.sync(enabled: false, active: nil, force: true), timestamp: 0,
-                             direction: "HUI-RM → Controller [Loopランプ復元]")
+                             direction: NSLocalizedString("MF-RM → Controller [Loop LED restore]", comment: ""))
         }
         flipReplay = FlipFeedbackReplay()
         transportSend = TransportSendRouting()
@@ -224,7 +224,7 @@ final class MIDIProxy: @unchecked Sendable {
         recRemapEnabled = enabled
         let feedback = remapper.modeChanged(enabled: enabled)
         if hardwareDestination != 0, outputPort != 0, !feedback.isEmpty {
-            sendToController(feedback, timestamp: 0, direction: "HUI-RM → Controller [Recランプ復元/同期]")
+            sendToController(feedback, timestamp: 0, direction: NSLocalizedString("MF-RM → Controller [Rec Ready LED restore/sync]", comment: ""))
         }
         lock.unlock()
     }
@@ -234,7 +234,7 @@ final class MIDIProxy: @unchecked Sendable {
         guard trimRemapEnabled != enabled else { lock.unlock(); return }
         trimRemapEnabled = enabled
         if isMagicFader, hardwareDestination != 0, outputPort != 0 {
-            sendToController(remapper.trimModeChanged(enabled: enabled), timestamp: 0, direction: "HUI-RM → Controller [Trimランプ同期/復元]")
+            sendToController(remapper.trimModeChanged(enabled: enabled), timestamp: 0, direction: NSLocalizedString("MF-RM → Controller [Trim LED sync/restore]", comment: ""))
         }
         lock.unlock()
     }
@@ -243,7 +243,7 @@ final class MIDIProxy: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         if !enabled, releaseRepairEnabled, isMagicFader, hardwareSource != 0 {
-            _ = sendToHost(releaseRepair.finishPending(), direction: "HUI-RM → Pro Tools [Solo Release補完終了]")
+            _ = sendToHost(releaseRepair.finishPending(), direction: NSLocalizedString("MF-RM → Pro Tools [Solo release repair ended]", comment: ""))
         }
         releaseRepairEnabled = enabled
     }
@@ -254,7 +254,7 @@ final class MIDIProxy: @unchecked Sendable {
         refreshEnabled = enabled
         if !enabled, isMagicFader, hardwareDestination != 0 {
             sendToController(faderRefresh.disable(now: ProcessInfo.processInfo.systemUptime), timestamp: 0,
-                             direction: "HUI-RM → Controller [リフレッシュOFF・復帰]")
+                             direction: NSLocalizedString("MF-RM → Controller [Refresh disabled; return]", comment: ""))
         }
     }
 
@@ -266,7 +266,7 @@ final class MIDIProxy: @unchecked Sendable {
         if !enabled { sendFlip.cancelRestore() }
         if isMagicFader, hardwareDestination != 0, outputPort != 0 {
             sendToController(loopFlip.sync(enabled: enabled, active: sendFlip.flipActive, force: true), timestamp: 0,
-                             direction: "HUI-RM → Controller [Loopランプ同期/復元]")
+                             direction: NSLocalizedString("MF-RM → Controller [Loop LED sync/restore]", comment: ""))
         }
     }
 
@@ -299,7 +299,7 @@ final class MIDIProxy: @unchecked Sendable {
         if let id = sendFlip.pendingFlipID {
             faderRefresh.assignmentChanged()
             flipReplay.cancel()
-            if sendToHost(words, direction: "HUI-RM → Pro Tools [前回のセンド選択]") != noErr {
+            if sendToHost(words, direction: NSLocalizedString("MF-RM → Pro Tools [Restore last send]", comment: "")) != noErr {
                 sendFlip.sendFailed()
             } else {
                 scheduleRestoredFlip(id, generation: generation)
@@ -326,7 +326,7 @@ final class MIDIProxy: @unchecked Sendable {
         // Cancel an old motor return before PT changes the faders' assignment.
         faderRefresh.assignmentChanged()
         let replayID = flipReplay.begin(now: ProcessInfo.processInfo.systemUptime)
-        if sendToHost(words, direction: "HUI-RM → Pro Tools [Flip切替・再選択なし]") != noErr {
+        if sendToHost(words, direction: NSLocalizedString("MF-RM → Pro Tools [Flip toggle; no reselection]", comment: "")) != noErr {
             sendFlip.sendFailed()
             flipReplay.cancel()
         } else {
@@ -346,7 +346,7 @@ final class MIDIProxy: @unchecked Sendable {
             let words = self.sendFlip.takePan(id, now: ProcessInfo.processInfo.systemUptime)
             guard !words.isEmpty else { return }
             let replayID = self.flipReplay.begin(now: ProcessInfo.processInfo.systemUptime)
-            if self.sendToHost(words, direction: "HUI-RM → Pro Tools [Flip解除後Pan選択]") != noErr {
+            if self.sendToHost(words, direction: NSLocalizedString("MF-RM → Pro Tools [Pan selection after Flip]", comment: "")) != noErr {
                 self.sendFlip.sendFailed()
                 self.flipReplay.cancel()
             } else {
@@ -364,8 +364,8 @@ final class MIDIProxy: @unchecked Sendable {
                   self.outputPort != 0, self.flipReplay.id == id else { return }
             if self.sendFlip.isTouched { self.flipReplay.cancel(); return }
             let direction = self.flipReplay.isSendChange
-                ? "HUI-RM → Controller [Flip中センド変更・表示位置再送]"
-                : "HUI-RM → Controller [Flip表示・位置再送]"
+                ? NSLocalizedString("MF-RM → Controller [Send changed while flipped; replay display/position]", comment: "")
+                : NSLocalizedString("MF-RM → Controller [Flip display/position replay]", comment: "")
             let words = self.flipReplay.next(id, now: ProcessInfo.processInfo.systemUptime)
             if !words.isEmpty {
                 self.sendToController(words, timestamp: 0, direction: direction)
@@ -388,7 +388,7 @@ final class MIDIProxy: @unchecked Sendable {
             guard self.generation == token, self.loopFlipEnabled, self.isMagicFader,
                   self.hardwareDestination != 0, self.outputPort != 0 else { return }
             let words = self.loopFlip.takeLED(id, now: ProcessInfo.processInfo.systemUptime)
-            self.sendToController(words, timestamp: 0, direction: "HUI-RM → Controller [Loopランプ・100ms後単独]")
+            self.sendToController(words, timestamp: 0, direction: NSLocalizedString("MF-RM → Controller [Loop LED; separate message after 100 ms]", comment: ""))
         }
     }
 
@@ -405,7 +405,7 @@ final class MIDIProxy: @unchecked Sendable {
             defer { self.lock.unlock() }
             guard self.generation == token, self.isMagicFader, self.hardwareDestination != 0 else { return }
             let output = self.faderRefresh.tick(now: ProcessInfo.processInfo.systemUptime)
-            self.sendToController(output, timestamp: 0, direction: "HUI-RM → Controller [フェーダー復帰]")
+            self.sendToController(output, timestamp: 0, direction: NSLocalizedString("MF-RM → Controller [Fader return]", comment: ""))
             if self.faderRefresh.active { self.scheduleRefreshTick(token) }
             else { self.refreshTimerRunning = false }
         }
@@ -419,7 +419,7 @@ final class MIDIProxy: @unchecked Sendable {
             defer { self.lock.unlock() }
             guard self.generation == token, self.releaseRepairEnabled, self.isMagicFader,
                   self.hardwareSource != 0, self.virtualSource != 0 else { return }
-            _ = self.sendToHost(self.releaseRepair.take(ticket), direction: "HUI-RM → Pro Tools [Solo Release補完]")
+            _ = self.sendToHost(self.releaseRepair.take(ticket), direction: NSLocalizedString("MF-RM → Pro Tools [Solo release repair]", comment: ""))
         }
     }
 
@@ -457,7 +457,7 @@ final class MIDIProxy: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         if trimRemapEnabled, isMagicFader, hardwareDestination != 0, outputPort != 0 {
-            sendToController(remapper.trimLEDUpdate(), timestamp: 0, direction: "HUI-RM → Controller [Trimランプ反映]")
+            sendToController(remapper.trimLEDUpdate(), timestamp: 0, direction: NSLocalizedString("MF-RM → Controller [Trim LED feedback]", comment: ""))
         }
         let value = Snapshot(events: events, omitted: omitted, toHost: toHost, toDevice: toDevice,
                              failures: failures, lastFailure: lastFailure, topologyChanged: topologyChanged, trimTarget: remapper.trimTarget, refreshNotice: faderRefresh.notice, flipLamp: sendFlip.lampText, flipNotice: sendFlip.notice)
@@ -490,13 +490,13 @@ final class MIDIProxy: @unchecked Sendable {
                     let output = remapper.process(repaired.words, enabled: recRemapEnabled, trimEnabled: trimRemapEnabled)
                     if output != words {
                         EventListTransport.sendWords(words, timestamp: packet.pointee.timeStamp) {
-                            record($0, direction: routed != words ? "Controller → HUI-RM [巻戻し/早送り → センド入力]" : loop.words != refresh.host ? "Controller → HUI-RM [Loop → Flip入力]" : (refresh.host != words ? "Controller → HUI-RM [リフレッシュ入力]" : "Controller → HUI-RM [入力]"), status: noErr)
+                            record($0, direction: routed != words ? NSLocalizedString("Controller → MF-RM [Rewind/FF → Send input]", comment: "") : loop.words != refresh.host ? NSLocalizedString("Controller → MF-RM [Loop → Flip input]", comment: "") : (refresh.host != words ? NSLocalizedString("Controller → MF-RM [Refresh input]", comment: "") : NSLocalizedString("Controller → MF-RM [Input]", comment: "")), status: noErr)
                             return noErr
                         }
                     }
                     let result = sendToHost(output, timestamp: packet.pointee.timeStamp,
-                        direction: output == words ? "Controller → Pro Tools" : "HUI-RM → Pro Tools [変換後]")
-                    sendToController(refresh.device, timestamp: 0, direction: "HUI-RM → Controller [フェーダーリフレッシュ 約5％]")
+                        direction: output == words ? "Controller → Pro Tools" : NSLocalizedString("MF-RM → Pro Tools [Remapped]", comment: ""))
+                    sendToController(refresh.device, timestamp: 0, direction: NSLocalizedString("MF-RM → Controller [Fader refresh ~5%]", comment: ""))
                     startRefreshTimer()
                     if result != noErr, sendReplayID != nil { flipReplay.cancel() }
                     if result == noErr {
@@ -504,10 +504,10 @@ final class MIDIProxy: @unchecked Sendable {
                         for _ in 0..<loop.presses { requestFlip() }
                         repaired.tickets.forEach { scheduleRelease($0) }
                         sendToController(remapper.takeFaderLEDFeedback(enabled: recRemapEnabled), timestamp: 0,
-                                         direction: "HUI-RM → Controller [Recタッチ表示]")
+                                         direction: NSLocalizedString("MF-RM → Controller [Rec Ready touch feedback]", comment: ""))
                         if trimRemapEnabled {
                             sendToController(remapper.trimLEDUpdate(), timestamp: 0,
-                                             direction: "HUI-RM → Controller [Trimランプ即時反映]")
+                                             direction: NSLocalizedString("MF-RM → Controller [Immediate Trim LED feedback]", comment: ""))
                         }
                     }
                 }
@@ -523,7 +523,7 @@ final class MIDIProxy: @unchecked Sendable {
                 packets.append((packet.pointee.timeStamp, output))
             }
             if changed {
-                record(list, direction: "Controller → HUI-RM [入力]", status: noErr)
+                record(list, direction: NSLocalizedString("Controller → MF-RM [Input]", comment: ""), status: noErr)
                 for (timestamp, words) in packets where !words.isEmpty {
                     // Chunk only on UMP message boundaries; expansion can exceed
                     // CoreMIDI's maximum event-list size for a large input list.
@@ -534,7 +534,7 @@ final class MIDIProxy: @unchecked Sendable {
                         toHost += Int(output.pointee.numPackets)
                         countFailure(result)
                         if result != noErr { remapper.sendFailed() }
-                        record(output, direction: "HUI-RM → Pro Tools [変換後]", status: result)
+                        record(output, direction: NSLocalizedString("MF-RM → Pro Tools [Remapped]", comment: ""), status: result)
                         return result
                     }
                 }
@@ -563,9 +563,9 @@ final class MIDIProxy: @unchecked Sendable {
                 packets.append((packet.pointee.timeStamp, output))
             }
             if changed {
-                record(list, direction: "Pro Tools → HUI-RM [入力]", status: noErr)
+                record(list, direction: NSLocalizedString("Pro Tools → MF-RM [Input]", comment: ""), status: noErr)
                 for (timestamp, words) in packets where !words.isEmpty {
-                    sendToController(words, timestamp: timestamp, direction: "HUI-RM → Controller [Rec/Trim/Loopランプ反映]")
+                    sendToController(words, timestamp: timestamp, direction: NSLocalizedString("MF-RM → Controller [Rec/Trim/Loop LED feedback]", comment: ""))
                 }
                 return
             }
