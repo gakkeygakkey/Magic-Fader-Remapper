@@ -11,7 +11,7 @@ struct ContentView: View {
         VStack(spacing: 0) {
             HStack {
                 VStack(alignment: .leading, spacing: 3) {
-                    Label("MF-RM", systemImage: "slider.vertical.3")
+                    Label("Magic Fader Remapper", systemImage: "slider.vertical.3")
                         .font(.title2.bold())
                     Text(NSLocalizedString("MagicFader · Pro Tools Utility", comment: ""))
                         .font(.callout).foregroundStyle(.secondary)
