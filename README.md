@@ -4,6 +4,8 @@
 
 A macOS menu bar utility for **PLATANE Magic Fader and Pro Tools**. It translates selected HUI MIDI messages to make automation and send control more convenient, without modifying the controller firmware or Pro Tools.
 
+<img src="docs/images/settings.png" alt="Magic Fader Remapper settings and menu bar icon" width="740">
+
 ```text
 Magic Fader ⇄ MF-RM ⇄ Pro Tools
 ```

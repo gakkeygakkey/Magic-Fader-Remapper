@@ -4,6 +4,8 @@
 
 **PLATANE Magic FaderをPro Toolsで使うためのmacOSメニューバーユーティリティ**です。一部のHUI MIDIメッセージを変換し、ミックスでよく使うオートメーションやセンド操作を本体のボタンに割り当てます。ファームウェアやPro Tools本体は改造しません。
 
+<img src="docs/images/settings.png" alt="Magic Fader Remapperの設定画面とメニューバーアイコン（英語表示）" width="740">
+
 ```text
 Magic Fader ⇄ MF-RM ⇄ Pro Tools
 ```
